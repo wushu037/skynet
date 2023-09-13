@@ -242,10 +242,12 @@ get_dest_string(lua_State *L, int index) {
     return dest_string;
 }
 
+// 发送消息
+// idx_type表示type在传入参数队列中的位置
 static int
 send_message(lua_State *L, int source, int idx_type) {
-    struct skynet_context *context = lua_touserdata(L, lua_upvalueindex(1));
-    uint32_t dest = (uint32_t)lua_tointeger(L, 1);
+    struct skynet_context *context = lua_touserdata(L, lua_upvalueindex(1)); // 获取代表当前所在服务
+    uint32_t dest = (uint32_t)lua_tointeger(L, 1);                           // 获取目标服务地址
     const char *dest_string = NULL;
     if (dest == 0) {
         if (lua_type(L, 1) == LUA_TNUMBER) {
@@ -254,9 +256,9 @@ send_message(lua_State *L, int source, int idx_type) {
         dest_string = get_dest_string(L, 1);
     }
 
-    int type = luaL_checkinteger(L, idx_type + 0);
+    int type = luaL_checkinteger(L, idx_type + 0); // 根据 指定位置 找到lua层传递的参数
     int session = 0;
-    if (lua_isnil(L, idx_type + 1)) {
+    if (lua_isnil(L, idx_type + 1)) { // session如果是nil 表示lua层希望分配一个session
         type |= PTYPE_TAG_ALLOCSESSION;
     } else {
         session = luaL_checkinteger(L, idx_type + 1);
@@ -277,12 +279,13 @@ send_message(lua_State *L, int source, int idx_type) {
             }
             break;
         }
-        case LUA_TLIGHTUSERDATA: {
+        case LUA_TLIGHTUSERDATA: { // skynet.call的调用是走这里
             void *msg = lua_touserdata(L, idx_type + 2);
             int size = luaL_checkinteger(L, idx_type + 3);
             if (dest_string) {
                 session = skynet_sendname(context, source, dest_string, type | PTYPE_TAG_DONTCOPY, session, msg, size);
             } else {
+                // 注意这里给 type 还加上了一个 PTYPE_TAG_DONTCOPY 标记 这里source是0
                 session = skynet_send(context, source, dest, type | PTYPE_TAG_DONTCOPY, session, msg, size);
             }
             break;

@@ -2,7 +2,7 @@
 local c = require "skynet.core" -- 这里实际上是一个c库 全局查找一下 skynet_core 即可知道这个库里面都往lua里面塞了什么函数
 local skynet_require = require "skynet.require"
 local tostring = tostring
-local coroutine = coroutine
+local coroutine = coroutine -- lua自带的协程库
 local assert = assert
 local pairs = pairs
 local pcall = pcall
@@ -18,12 +18,13 @@ local cresume = coroutine.resume
 local running_thread = nil
 local init_thread = nil
 
+--唤醒协程
 local function coroutine_resume(co, ...)
-    running_thread = co
+    running_thread = co -- 唤醒协程时 记录当前正在执行的协程
     return cresume(co, ...)
 end
-local coroutine_yield = coroutine.yield
-local coroutine_create = coroutine.create
+local coroutine_yield = coroutine.yield -- 挂起协程
+local coroutine_create = coroutine.create -- 创建协程
 
 local proto = {}
 local skynet = {
@@ -249,11 +250,12 @@ end
 
 local coroutine_pool = setmetatable({}, { __mode = "kv" })
 
+-- https://www.cnblogs.com/waittingforyou/p/17023069.html
 local function co_create(f)
-    local co = tremove(coroutine_pool)
+    local co = tremove(coroutine_pool) -- 从协程池中取出一个协程
     if co == nil then
         co = coroutine_create(function(...)
-            f(...)
+            f(...) -- 执行任务
             while true do
                 local session = session_coroutine_id[co]
                 if session and session ~= 0 then
@@ -277,19 +279,21 @@ local function co_create(f)
                     session_coroutine_address[co] = nil
                 end
 
-                -- recycle co into pool
+                -- recycle co into pool  将协程回收到协程池中
                 f = nil
                 coroutine_pool[#coroutine_pool + 1] = co
                 -- recv new main function f
-                f = coroutine_yield "SUSPEND"
+                -- 挂起当前协程 当协程再次唤醒时 把传递进来的参数赋值给f。下面的coroutine_resume传递的f就会被赋值给这个f
+                f = coroutine_yield "SUSPEND" -- 这lua函数调用的一种语法，等价于f=coroutine_yield("SUSPEND") lua文档：https://cloudwu.github.io/lua53doc/manual.html#3.4.10
+                -- 这里又挂起了，通过外部唤醒执行。(外部调用本函数co_create会得到协程，外部唤醒时就真正执行了)
                 f(coroutine_yield())
             end
         end)
     else
         -- pass the main function f to coroutine, and restore running thread
-        local running = running_thread
-        coroutine_resume(co, f)
-        running_thread = running
+        local running = running_thread -- 保存调用co_create所在的协程
+        coroutine_resume(co, f) -- 重新设置任务函数 另外 coroutine_resume 每次都会设置当前正在运行的协程
+        running_thread = running -- 恢复记录调用co_create所在的协程
     end
     return co
 end
@@ -617,8 +621,8 @@ function skynet.call(addr, typename, ...)
         c.send(addr, skynet.PTYPE_TRACE, 0, tag)
     end
 
-    local p = proto[typename]
-    local session = c.send(addr, p.id, nil, p.pack(...))
+    local p = proto[typename] -- 根据消息类型获取对应的协议
+    local session = c.send(addr, p.id, nil, p.pack(...)) -- session是通过当前服务分配的 注意第三个参数是 nil
     if session == nil then
         error("call to invalid address " .. skynet.address(addr))
     end
@@ -652,7 +656,7 @@ function skynet.ret(msg, sz)
     if tag then
         c.trace(tag, "response")
     end
-    local co_session = session_coroutine_id[running_thread]
+    local co_session = session_coroutine_id[running_thread] -- 找到session
     if co_session == nil then
         error "No session"
     end
@@ -663,8 +667,8 @@ function skynet.ret(msg, sz)
         end
         return false    -- send don't need ret
     end
-    local co_address = session_coroutine_address[running_thread]
-    local ret = c.send(co_address, skynet.PTYPE_RESPONSE, co_session, msg, sz)
+    local co_address = session_coroutine_address[running_thread] -- 找到请求者的地址
+    local ret = c.send(co_address, skynet.PTYPE_RESPONSE, co_session, msg, sz) -- 注意消息类型是skynet.PTYPE_RESPONSE
     if ret then
         return true
     elseif ret == false then
@@ -794,7 +798,9 @@ local trace_source = {}
 local function raw_dispatch_message(prototype, msg, sz, session, source)
     -- skynet.PTYPE_RESPONSE = 1, read skynet.h
     if prototype == 1 then
-        local co = session_id_coroutine[session]
+        -- 这里是处理响应
+
+        local co = session_id_coroutine[session] -- 响应消息的处理都是 通过session去得到协程 然后执行协程;因为session是本服务分配的 所以具有唯一性
         if co == "BREAK" then
             session_id_coroutine[session] = nil
         elseif co == nil then
@@ -808,6 +814,8 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
             suspend(co, coroutine_resume(co, true, msg, sz, session))
         end
     else
+        -- 这里主要是处理 lua text socket 等消息类型
+
         local p = proto[prototype]
         if p == nil then
             if prototype == skynet.PTYPE_TRACE then
@@ -821,10 +829,12 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
             return
         end
 
-        local f = p.dispatch
+        local f = p.dispatch -- 这里的函数就是 skynet.dispatch 传入的函数
         if f then
-            local co = co_create(f)
+            local co = co_create(f) -- 获取一个协程对象并设置任务函数f
+            -- 保存session以便找到回去的路；注意这里的session是其它服务独立产生的，所以不同的请求者发送过来的session可以是相同的
             session_coroutine_id[co] = session
+            -- 保存source以便找到回去的路，即记录请求者是谁
             session_coroutine_address[co] = source
             local traceflag = p.trace
             if traceflag == false then
@@ -843,6 +853,7 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
                     skynet.trace()
                 end
             end
+            -- 唤醒协程
             suspend(co, coroutine_resume(co, session, source, p.unpack(msg, sz)))
         else
             trace_source[source] = nil

@@ -489,7 +489,7 @@ cmd_launch(struct skynet_context *context, const char *param) {
     if (inst == NULL) {
         return NULL;
     } else {
-        id_to_hex(context->result, inst->handle);
+        id_to_hex(context->result, inst->handle); // 把handle表示成8位16进制的字符串，注意是以冒号开头，举例 ":000123ff"
         return context->result;
     }
 }
@@ -675,27 +675,27 @@ skynet_command(struct skynet_context *context, const char *cmd, const char *para
 
 static void
 _filter_args(struct skynet_context *context, int type, int *session, void **data, size_t *sz) {
-    int needcopy = !(type & PTYPE_TAG_DONTCOPY);
-    int allocsession = type & PTYPE_TAG_ALLOCSESSION;
-    type &= 0xff;
+    int needcopy = !(type & PTYPE_TAG_DONTCOPY);      // 检查type里面有没有 PTYPE_TAG_DONTCOPY 标签
+    int allocsession = type & PTYPE_TAG_ALLOCSESSION; // 检查type里面有没有 PTYPE_TAG_ALLOCSESSION 标记
+    type &= 0xff;                                     // 只保留低八位 丢弃临时添加的 PTYPE_TAG_DONTCOPY PTYPE_TAG_ALLOCSESSION 这些标记
 
     if (allocsession) {
         assert(*session == 0);
-        *session = skynet_context_newsession(context);
+        *session = skynet_context_newsession(context); // 需要分配session的时候 context不能为NULL
     }
 
-    if (needcopy && *data) {
+    if (needcopy && *data) { // 是否需要分配新内存 把data数据重新拷贝一份
         char *msg = skynet_malloc(*sz + 1);
         memcpy(msg, *data, *sz);
         msg[*sz] = '\0';
         *data = msg;
     }
 
-    *sz |= (size_t)type << MESSAGE_TYPE_SHIFT;
+    *sz |= (size_t)type << MESSAGE_TYPE_SHIFT; // 把type放置到sz的高八位上
 }
 
 int skynet_send(struct skynet_context *context, uint32_t source, uint32_t destination, int type, int session, void *data, size_t sz) {
-    if ((sz & MESSAGE_TYPE_MASK) != sz) {
+    if ((sz & MESSAGE_TYPE_MASK) != sz) { // sz是当前系统最大无符号数 sz的高8位是给type用 此时高8位必须是全0
         skynet_error(context, "The message to %x is too large", destination);
         if (type & PTYPE_TAG_DONTCOPY) {
             skynet_free(data);
@@ -704,8 +704,8 @@ int skynet_send(struct skynet_context *context, uint32_t source, uint32_t destin
     }
     _filter_args(context, type, &session, (void **)&data, &sz);
 
-    if (source == 0) {
-        source = context->handle;
+    if (source == 0) {            // 当前是0
+        source = context->handle; // 当前服务的handle
     }
 
     if (destination == 0) {
@@ -726,17 +726,17 @@ int skynet_send(struct skynet_context *context, uint32_t source, uint32_t destin
         skynet_harbor_send(rmsg, source, session);
     } else {
         struct skynet_message smsg;
-        smsg.source = source;
-        smsg.session = session;
+        smsg.source = source;   // 当前服务handle
+        smsg.session = session; // 新生成的session
         smsg.data = data;
         smsg.sz = sz;
 
-        if (skynet_context_push(destination, &smsg)) {
+        if (skynet_context_push(destination, &smsg)) { // 把消息push到目标服务的队列
             skynet_free(data);
             return -1;
         }
     }
-    return session;
+    return session; // 最后返回session给lua层
 }
 
 int skynet_sendname(struct skynet_context *context, uint32_t source, const char *addr, int type, int session, void *data, size_t sz) {

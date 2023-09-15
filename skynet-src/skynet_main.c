@@ -114,6 +114,7 @@ static const char *load_config = "\
 	return result\n\
 ";
 
+// skynet的入口函数
 int main(int argc, char *argv[]) {
     const char *config_file = NULL;
     if (argc > 1) {
